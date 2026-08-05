@@ -6,11 +6,15 @@ from pathlib import Path
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.common.paths import RESULTS_ROOT
 
 app = FastAPI(title="Road Risk API", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+WEB_ROOT = Path(__file__).resolve().parents[1] / "frontend" / "web"
 
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "pipeline.bengaluru.2020_2024.json"
 BBOX = [77.45, 12.8, 77.75, 13.1]
@@ -173,6 +177,15 @@ def risk_roads(
     return {"roads": roads, "total": len(data.get("roads", []))}
 
 
+@app.get("/dashboard")
+def dashboard() -> FileResponse:
+    """Full precomputed payload for the interactive command-center UI."""
+    path = RESULTS_ROOT / "dashboard.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Run build_road_risk first.")
+    return FileResponse(path, media_type="application/json")
+
+
 @app.get("/risk/heatmap")
 def risk_heatmap(
     model: str = Query("tabular", description="tabular or cnn_temporal"),
@@ -197,3 +210,8 @@ def risk_heatmap(
         lon, lat = _tile_to_center(str(row["tile_id"]), bbox, grid_size)
         out.append({"tile_id": str(row["tile_id"]), "lon": lon, "lat": lat, "risk_score": float(row["risk_score"])})
     return out
+
+
+# Interactive command-center UI (must be mounted last so API routes win).
+if WEB_ROOT.exists():
+    app.mount("/", StaticFiles(directory=str(WEB_ROOT), html=True), name="web")

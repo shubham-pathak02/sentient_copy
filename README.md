@@ -14,13 +14,28 @@ Sentient addresses this with a reproducible data-to-decision pipeline.
 ## Core capabilities
 
 - Multi-source ingestion: Sentinel-1/2, Landsat, ERA5, Nightlights, Population, OSM.
-- Monthly stress feature engineering on a city grid.
-- Dual-model strategy:
-  - CNN-temporal primary model.
-  - Tabular fallback model.
-- Road-level ranking and map geometry output (`road_risk_ranking.json`).
-- FastAPI endpoints for metadata, rankings, heatmaps, and roads.
-- Streamlit dashboard for decision-oriented visualization.
+- Monthly stress feature engineering on a city grid, plus within-window temporal
+  dynamics (deltas, trends, volatility), seasonality, and cross-stress interactions.
+- Model sweep with automatic selection: Ridge baseline, HistGB, RandomForest,
+  ExtraTrees, LightGBM, XGBoost, and a time-aware stacked ensemble
+  (current best: `temporal_et` — ExtraTrees).
+- CNN-temporal track (LSTM / TCN over image sequences) as a second opinion.
+- Road-level ranking with per-road stress drivers, monthly risk trends,
+  months-to-critical projections, and city summaries (`dashboard.json`).
+- FastAPI serving both the JSON API and the interactive frontend.
+- **SENTIENT Command Center** — an interactive map UI (`src/frontend/web/`)
+  built for commissioners, not data scientists:
+  - Real dark basemap (CARTO / OpenStreetMap) with localities and street names,
+    risk-ranked roads overlaid as colored corridors (hover / click / search).
+  - Hero risk snapshot with plain-language stats per city.
+  - Road drill-down: priority score, stress drivers, trend sparkline vs the
+    critical band, recommended action, months-to-critical countdown.
+  - Time Machine: replay 2020–2024 month by month — roads re-color as their
+    condition changes, driver meters (rainfall / standing water / heat) move,
+    and a narrated caption explains what is degrading which part of the city.
+  - Budget Planner: what-if slider that builds an auto-prioritized work order
+    and estimates reactive cost avoided.
+  - One-click Executive Brief (print / save as PDF).
 
 ## Project structure
 
@@ -67,11 +82,16 @@ powershell -ExecutionPolicy Bypass -File scripts/run_pipeline.ps1 -ConfigPath "c
 powershell -ExecutionPolicy Bypass -File scripts/run_api.ps1
 ```
 
-### 4) Run frontend
+### 4) Open the Command Center
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/run_frontend.ps1
+The API serves the interactive frontend directly — start the API and open:
+
+```text
+http://localhost:8000
 ```
+
+(The legacy Streamlit dashboard is still available via
+`powershell -ExecutionPolicy Bypass -File scripts/run_frontend.ps1`.)
 
 ## Documentation (modern UI)
 
@@ -99,12 +119,15 @@ Open `http://127.0.0.1:8000`.
 - `GET /risk/by_zone`
 - `GET /risk/heatmap`
 - `GET /risk/roads`
+- `GET /dashboard` — full payload for the Command Center UI
+- `GET /` — the Command Center itself
 
 ## Main outputs
 
 - `data/results/risk_scores.parquet`
 - `data/results/risk_scores_cnn_temporal.parquet`
 - `data/results/road_risk_ranking.json`
+- `data/results/dashboard.json`
 - `data/results/evaluation.json`
 - `data/results/data_inventory_manifest.json`
 

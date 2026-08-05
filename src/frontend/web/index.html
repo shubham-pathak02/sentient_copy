@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SENTIENT — Road Infrastructure Command Center</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%230C0E12'/><circle cx='50' cy='50' r='22' fill='none' stroke='%23C9A227' stroke-width='8'/></svg>" />
+</head>
+<body>
+
+<div id="splash">
+  <div class="splash-inner">
+    <div class="splash-logo">SENTIENT</div>
+    <div class="splash-sub">ROAD INFRASTRUCTURE INTELLIGENCE · SATELLITE OBSERVED</div>
+    <div class="splash-bar"><div id="splash-progress"></div></div>
+  </div>
+</div>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <span class="brand-name">SENTIENT</span>
+    <span class="brand-tag">Road Infrastructure Command Center</span>
+  </div>
+
+  <nav id="city-switch" class="seg"></nav>
+
+  <nav id="mode-switch" class="seg">
+    <button class="seg-btn active" data-mode="overview">Command Center</button>
+    <button class="seg-btn" data-mode="time">Time Machine</button>
+    <button class="seg-btn" data-mode="budget">Budget Planner</button>
+  </nav>
+
+  <div class="topbar-right">
+    <div id="search-wrap">
+      <input id="search" type="text" placeholder="Find a road" autocomplete="off" />
+      <div id="search-results"></div>
+    </div>
+    <button id="brief-btn" class="ghost-btn">Executive Brief</button>
+  </div>
+</header>
+
+<main id="stage">
+  <div id="map"></div>
+  <div id="tooltip"></div>
+
+  <!-- Left: mission panel (overview) -->
+  <aside id="panel-overview" class="panel left-panel">
+    <div class="panel-kicker" id="ov-kicker">CITY RISK SNAPSHOT</div>
+    <div id="hero-stats"></div>
+    <div class="panel-section-title">ACT FIRST <span class="hint">— highest projected risk</span></div>
+    <ol id="act-first"></ol>
+    <div class="legend">
+      <span><i class="sw sw-high"></i>Critical</span>
+      <span><i class="sw sw-med"></i>Watch</span>
+      <span><i class="sw sw-low"></i>Stable</span>
+      <span><i class="sw sw-treated"></i>In plan</span>
+    </div>
+  </aside>
+
+  <!-- Left: time machine story -->
+  <aside id="panel-story" class="panel left-panel hidden">
+    <div class="panel-kicker">HOW THE STRESS BUILT UP</div>
+    <div id="story-month">—</div>
+    <div id="story-phase">—</div>
+    <p id="story-caption"></p>
+
+    <div class="meter">
+      <div class="meter-head"><span>Rainfall loading</span><b id="mv-rain">—</b></div>
+      <div class="meter-track"><i id="mf-rain"></i></div>
+    </div>
+    <div class="meter">
+      <div class="meter-head"><span>Standing water</span><b id="mv-flood">—</b></div>
+      <div class="meter-track"><i id="mf-flood"></i></div>
+    </div>
+    <div class="meter">
+      <div class="meter-head"><span>Heat exposure</span><b id="mv-heat">—</b></div>
+      <div class="meter-track"><i id="mf-heat"></i></div>
+    </div>
+
+    <div id="story-hot">
+      <div class="hot-row"><b id="hot-count">—</b><span>roads in the critical band this month</span></div>
+      <div id="hot-delta"></div>
+    </div>
+
+    <div id="story-road" class="hidden">
+      <div class="panel-section-title">TRACKED ROAD</div>
+      <div id="story-road-name"></div>
+      <div id="story-road-status"></div>
+    </div>
+
+    <div class="story-tip">Press play, or drag the timeline. Roads on the map re-colour as their condition changes. Click a road to track it through time.</div>
+  </aside>
+
+  <!-- Left: budget simulator -->
+  <aside id="panel-budget" class="panel left-panel hidden">
+    <div class="panel-kicker">WHAT IF WE ACT NOW?</div>
+    <div class="budget-amount"><span id="budget-value">₹ 25 cr</span><span class="budget-label">preventive budget</span></div>
+    <input id="budget-slider" type="range" min="0" max="100" step="1" value="25" />
+    <div class="slider-scale"><span>₹0</span><span id="budget-max-label">₹100 cr</span></div>
+
+    <div id="budget-kpis">
+      <div class="bkpi"><div class="bkpi-num" id="bk-roads">0</div><div class="bkpi-cap">roads protected</div></div>
+      <div class="bkpi"><div class="bkpi-num" id="bk-km">0</div><div class="bkpi-cap">km resurfaced early</div></div>
+      <div class="bkpi"><div class="bkpi-num saved" id="bk-saved">₹0</div><div class="bkpi-cap">reactive cost avoided</div></div>
+      <div class="bkpi"><div class="bkpi-num" id="bk-cover">0%</div><div class="bkpi-cap">of critical band secured</div></div>
+    </div>
+    <div class="coverage-track"><div id="coverage-fill"></div></div>
+    <div class="roi-line" id="roi-line"></div>
+
+    <div class="panel-section-title">WORK ORDER <span class="hint">— auto-prioritized</span></div>
+    <ol id="plan-list"></ol>
+    <div class="assumptions">
+      Planning assumptions: preventive resurfacing ₹<span id="as-cost">65</span> lakh/km ·
+      reactive repair costs <span id="as-mult">3.2</span>× preventive ·
+      based on satellite stress observed 2020–2024.
+    </div>
+  </aside>
+
+  <!-- Right: road detail drawer -->
+  <aside id="drawer" class="panel hidden">
+    <button id="drawer-close">×</button>
+    <div id="drawer-tier" class="tier-badge">TOP PRIORITY</div>
+    <h2 id="drawer-name">Road name</h2>
+    <div id="drawer-sub" class="drawer-sub"></div>
+
+    <div class="drawer-stats">
+      <div><div class="ds-num" id="drawer-risk">—</div><div class="ds-cap">priority score / 100</div></div>
+      <div><div class="ds-num" id="drawer-countdown">—</div><div class="ds-cap" id="drawer-countdown-cap">to critical band</div></div>
+      <div><div class="ds-num" id="drawer-len">—</div><div class="ds-cap">length</div></div>
+    </div>
+
+    <div class="panel-section-title">WHY THIS ROAD</div>
+    <div id="drawer-drivers"></div>
+
+    <div class="panel-section-title">STRESS OVER TIME</div>
+    <canvas id="spark" width="360" height="90"></canvas>
+
+    <div class="action-card">
+      <div class="action-kicker">RECOMMENDED ACTION</div>
+      <div id="drawer-action">—</div>
+    </div>
+    <button id="add-plan-btn" class="solid-btn wide">Add to maintenance plan</button>
+  </aside>
+
+  <!-- Bottom: timeline -->
+  <div id="timebar" class="hidden">
+    <button id="play-btn" title="Play">▶</button>
+    <div id="time-readout"><span id="time-month">—</span><span id="time-note"></span></div>
+    <div id="scrubber-wrap">
+      <canvas id="trend-canvas" height="56"></canvas>
+      <input id="scrubber" type="range" min="0" max="56" step="1" value="56" />
+    </div>
+  </div>
+</main>
+
+<!-- Executive brief -->
+<div id="brief-overlay" class="hidden">
+  <div id="brief-doc">
+    <button id="brief-close">×</button>
+    <div id="brief-content"></div>
+    <div class="brief-actions">
+      <button id="brief-print" class="solid-btn">Print / Save as PDF</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

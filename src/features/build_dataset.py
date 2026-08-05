@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,19 @@ FEATURE_COLUMNS = [
     "population_mean",
     "population_p90",
     "era5_total_precipitation_mean",
+    "era5_total_precipitation_sum",
+    "era5_2m_temperature_mean",
+]
+
+# Columns whose within-window dynamics (deltas, trends, volatility) carry signal.
+DYNAMIC_COLUMNS = [
+    "s1_backscatter_mean",
+    "s1_flood_fraction",
+    "s2_ndvi_mean",
+    "s2_ndwi_mean",
+    "landsat_thermal_mean_k",
+    "landsat_heat_exposure_fraction",
+    "nightlights_mean",
     "era5_total_precipitation_sum",
     "era5_2m_temperature_mean",
 ]
@@ -123,6 +137,27 @@ def build_windows(df: pd.DataFrame, window_size: int) -> pd.DataFrame:
             record["stress_accum_rain_3m"] = float(window["era5_total_precipitation_sum"].tail(3).sum())
             record["stress_accum_heat_3m"] = float(window["landsat_heat_exposure_fraction"].tail(3).mean())
             record["stress_accum_flood_3m"] = float(window["s1_flood_fraction"].tail(3).sum())
+
+            # Within-window temporal dynamics (all computed from past observations only).
+            for col in DYNAMIC_COLUMNS:
+                newest = float(window.iloc[-1][col])
+                oldest = float(window.iloc[0][col])
+                vals = window[col].astype(float)
+                record[f"{col}_delta1"] = newest - float(window.iloc[-2][col])
+                record[f"{col}_trend"] = (newest - oldest) / max(1, window_size - 1)
+                record[f"{col}_winmax"] = float(vals.max())
+                record[f"{col}_winstd"] = float(vals.std(ddof=0))
+
+            # Calendar seasonality of the month being predicted (deterministic, not observed data).
+            target_month_num = int(str(next_row["month_id"]).split("-")[1])
+            record["target_month_sin"] = math.sin(2.0 * math.pi * target_month_num / 12.0)
+            record["target_month_cos"] = math.cos(2.0 * math.pi * target_month_num / 12.0)
+
+            # Cross-stress interactions.
+            record["ix_rain_flood"] = record["stress_accum_rain_3m"] * record["stress_accum_flood_3m"]
+            record["ix_heat_temp"] = record["stress_accum_heat_3m"] * float(cur["era5_2m_temperature_mean"])
+            record["ix_rain_ndwi"] = record["stress_accum_rain_3m"] * float(cur["s2_ndwi_mean"])
+            record["ix_load_flood"] = float(cur["nightlights_mean"]) * record["stress_accum_flood_3m"]
             rows.append(record)
 
     if not rows:
@@ -162,6 +197,7 @@ def main() -> None:
     out = build_windows(df, args.window_size)
 
     version_seed = {
+        "columns": sorted(out.columns.tolist()),
         "cities": [city_key(city) for city in cities],
         "window_size": args.window_size,
         "train_fraction": args.train_fraction,

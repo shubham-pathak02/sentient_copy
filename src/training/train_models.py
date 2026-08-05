@@ -7,9 +7,16 @@ import random
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from lightgbm import LGBMRegressor
+from sklearn.base import BaseEstimator, RegressorMixin, clone
+from sklearn.ensemble import (
+    ExtraTreesRegressor,
+    HistGradientBoostingRegressor,
+    RandomForestRegressor,
+)
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from xgboost import XGBRegressor
 
 from src.common.paths import FEATURES_ROOT, MODELS_ROOT, ensure_dir
 
@@ -48,9 +55,7 @@ def select_features(df: pd.DataFrame, mode: str) -> list[str]:
     ]
     if mode == "baseline":
         return [c for c in numeric_cols if c.endswith("_lag0") or c.startswith("stress_accum_")]
-    if mode in {"temporal_gb", "temporal_rf"}:
-        return numeric_cols
-    raise ValueError(f"unsupported mode: {mode}")
+    return numeric_cols
 
 
 def spearman_rank_correlation(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -88,6 +93,115 @@ def metrics_payload(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     }
 
 
+def build_model(mode: str):
+    if mode == "baseline":
+        return Ridge(alpha=1.0)
+    if mode == "temporal_gb":
+        return HistGradientBoostingRegressor(
+            learning_rate=0.05,
+            max_depth=4,
+            max_iter=300,
+            random_state=42,
+        )
+    if mode == "temporal_rf":
+        return RandomForestRegressor(
+            n_estimators=300,
+            max_depth=12,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1,
+        )
+    if mode == "temporal_et":
+        return ExtraTreesRegressor(
+            n_estimators=600,
+            max_depth=None,
+            min_samples_leaf=2,
+            max_features=0.6,
+            random_state=42,
+            n_jobs=-1,
+        )
+    if mode == "temporal_lgbm":
+        return LGBMRegressor(
+            n_estimators=900,
+            learning_rate=0.03,
+            num_leaves=31,
+            min_child_samples=10,
+            subsample=0.85,
+            subsample_freq=1,
+            colsample_bytree=0.75,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            random_state=42,
+            n_jobs=-1,
+            verbosity=-1,
+        )
+    if mode == "temporal_xgb":
+        return XGBRegressor(
+            n_estimators=900,
+            learning_rate=0.03,
+            max_depth=5,
+            min_child_weight=3,
+            subsample=0.85,
+            colsample_bytree=0.75,
+            reg_alpha=0.1,
+            reg_lambda=1.0,
+            random_state=42,
+            n_jobs=-1,
+            tree_method="hist",
+        )
+    if mode == "temporal_stack":
+        return TimeStackRegressor(
+            estimators=[
+                ("lgbm", build_model("temporal_lgbm")),
+                ("xgb", build_model("temporal_xgb")),
+                ("rf", build_model("temporal_rf")),
+                ("et", build_model("temporal_et")),
+                ("gb", build_model("temporal_gb")),
+            ],
+            meta_fraction=0.25,
+        )
+    raise ValueError(f"unsupported mode: {mode}")
+
+
+class TimeStackRegressor(BaseEstimator, RegressorMixin):
+    """Stacked ensemble with a temporal holdout for the meta-learner.
+
+    Rows must arrive in time order. Base models are fit on the earliest
+    (1 - meta_fraction) of the training data, the Ridge meta-learner is fit on
+    their predictions over the most recent meta_fraction, then base models are
+    refit on the full training data for inference.
+    """
+
+    def __init__(self, estimators: list[tuple[str, object]], meta_fraction: float = 0.25):
+        self.estimators = estimators
+        self.meta_fraction = meta_fraction
+
+    def fit(self, X, y):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float)
+        n = len(X)
+        split = max(1, min(n - 1, int(n * (1.0 - self.meta_fraction))))
+
+        holdout_preds = []
+        for _, est in self.estimators:
+            m = clone(est)
+            m.fit(X[:split], y[:split])
+            holdout_preds.append(m.predict(X[split:]))
+
+        self.meta_ = Ridge(alpha=1.0)
+        self.meta_.fit(np.column_stack(holdout_preds), y[split:])
+
+        self.fitted_ = [clone(est) for _, est in self.estimators]
+        for m in self.fitted_:
+            m.fit(X, y)
+        return self
+
+    def predict(self, X):
+        X = np.asarray(X, dtype=float)
+        base = np.column_stack([m.predict(X) for m in self.fitted_])
+        return self.meta_.predict(base)
+
+
 def train_one(train_df: pd.DataFrame, val_df: pd.DataFrame, mode: str) -> dict[str, object]:
     feats = select_features(train_df, mode)
     x_train = train_df[feats].to_numpy(dtype=float)
@@ -96,25 +210,7 @@ def train_one(train_df: pd.DataFrame, val_df: pd.DataFrame, mode: str) -> dict[s
     x_val = val_df[feats].to_numpy(dtype=float)
     y_val = val_df["target_proxy"].to_numpy(dtype=float)
 
-    if mode == "baseline":
-        model = Ridge(alpha=1.0)
-    elif mode == "temporal_gb":
-        model = HistGradientBoostingRegressor(
-            learning_rate=0.05,
-            max_depth=4,
-            max_iter=300,
-            random_state=42,
-        )
-    elif mode == "temporal_rf":
-        model = RandomForestRegressor(
-            n_estimators=300,
-            max_depth=12,
-            min_samples_leaf=2,
-            random_state=42,
-            n_jobs=-1,
-        )
-    else:
-        raise ValueError(f"unsupported mode: {mode}")
+    model = build_model(mode)
 
     model.fit(x_train, y_train)
     pred = model.predict(x_val)
@@ -145,22 +241,29 @@ def main() -> None:
     df = pd.read_parquet(args.dataset)
     train_df, val_df = time_split(df, args.val_fraction)
 
-    baseline = train_one(train_df, val_df, "baseline")
-    temporal_gb = train_one(train_df, val_df, "temporal_gb")
-    temporal_rf = train_one(train_df, val_df, "temporal_rf")
+    modes = [
+        "baseline",
+        "temporal_gb",
+        "temporal_rf",
+        "temporal_et",
+        "temporal_lgbm",
+        "temporal_xgb",
+        "temporal_stack",
+    ]
+    trained: dict[str, dict[str, object]] = {}
+    for mode in modes:
+        trained[mode] = train_one(train_df, val_df, mode)
+        print(json.dumps(trained[mode]["metrics"]))
 
     out_dir = ensure_dir(MODELS_ROOT)
-    joblib.dump({"model": baseline["model"], "features": baseline["features"], "model_name": "baseline"}, out_dir / "baseline_model.joblib")
-    joblib.dump({"model": temporal_gb["model"], "features": temporal_gb["features"], "model_name": "temporal_gb"}, out_dir / "temporal_gb_model.joblib")
-    joblib.dump({"model": temporal_rf["model"], "features": temporal_rf["features"], "model_name": "temporal_rf"}, out_dir / "temporal_rf_model.joblib")
+    for mode in modes:
+        joblib.dump(
+            {"model": trained[mode]["model"], "features": trained[mode]["features"], "model_name": mode},
+            out_dir / f"{'baseline_model' if mode == 'baseline' else mode + '_model'}.joblib",
+        )
 
-    candidates = [
-        ("baseline", baseline),
-        ("temporal_gb", temporal_gb),
-        ("temporal_rf", temporal_rf),
-    ]
     best_name, best_obj = max(
-        candidates,
+        trained.items(),
         key=lambda x: (
             float(x[1]["metrics"]["top_decile_lift"]),
             float(x[1]["metrics"]["spearman"]),
@@ -171,7 +274,7 @@ def main() -> None:
 
     val_target = val_df["target_proxy"].to_numpy(dtype=float)
     yearly_metrics: dict[str, dict[str, dict[str, float]]] = {}
-    for model_name, model_obj in [("baseline", baseline), ("temporal_gb", temporal_gb), ("temporal_rf", temporal_rf)]:
+    for model_name, model_obj in trained.items():
         preds = np.asarray(model_obj["pred"], dtype=float)
         by_year: dict[str, dict[str, float]] = {}
         for year in sorted(val_df["target_date"].dt.year.unique()):
@@ -186,9 +289,7 @@ def main() -> None:
         "train_rows": int(len(train_df)),
         "validation_rows": int(len(val_df)),
         "seed": args.seed,
-        "baseline": baseline["metrics"],
-        "temporal_gb": temporal_gb["metrics"],
-        "temporal_rf": temporal_rf["metrics"],
+        **{mode: trained[mode]["metrics"] for mode in modes},
         "validation_metrics_by_year": yearly_metrics,
         "best_model": best_name,
     }

@@ -2,6 +2,8 @@ cdsapi
 earthengine-api
 fastapi
 joblib
+lightgbm
+xgboost
 netcdf4
 numpy
 pandas

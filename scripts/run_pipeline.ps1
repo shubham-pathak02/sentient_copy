@@ -39,7 +39,7 @@ if ($ModelTrack -eq "tabular" -or $ModelTrack -eq "both") {
   python -m src.training.train_models --dataset data/features/dataset.parquet --val-fraction 0.3
   python -m src.inference.score_risk --dataset data/features/dataset.parquet --model models/best_model.joblib
   python -m src.evaluation.evaluate --dataset data/features/dataset.parquet --predictions data/results/risk_scores.parquet --training-metrics models/training_metrics.json
-python -m src.features.build_road_risk --max-roads 300
+  python -m src.features.build_road_risk --city $city --max-roads 900
 }
 
 if ($ModelTrack -eq "cnn" -or $ModelTrack -eq "both") {
