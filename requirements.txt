@@ -18,3 +18,4 @@ streamlit
 torch
 uvicorn
 xarray
+-e
